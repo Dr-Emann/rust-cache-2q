@@ -159,7 +159,7 @@ impl<K: Eq, V> Cache<K, V> {
 
     /// Returns true if the cache contains a value for the specified key.
     ///
-    /// The key may be any borrowed form of the map's key type, but
+    /// The key may be any borrowed form of the cache's key type, but
     /// Eq on the borrowed form must match those for the key type.
     ///
     /// # Examples
@@ -191,10 +191,10 @@ impl<K: Eq, V> Cache<K, V> {
     /// ```
     /// use cache_2q::Cache;
     ///
-    /// let mut map = Cache::new(32);
-    /// map.insert(1, "a");
-    /// assert_eq!(map.get(&1), Some(&"a"));
-    /// assert_eq!(map.get(&2), None);
+    /// let mut cache = Cache::new(32);
+    /// cache.insert(1, "a");
+    /// assert_eq!(cache.get(&1), Some(&"a"));
+    /// assert_eq!(cache.get(&2), None);
     /// ```
     pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Option<&V>
     where
@@ -216,7 +216,7 @@ impl<K: Eq, V> Cache<K, V> {
 
     /// Returns a mutable reference to the value corresponding to the key.
     ///
-    /// The key may be any borrowed form of the map's key type, but
+    /// The key may be any borrowed form of the cache's key type, but
     /// Eq on the borrowed form *must* match those for
     /// the key type.
     ///
@@ -326,7 +326,7 @@ impl<K: Eq, V> Cache<K, V> {
         self.a1_in.len() + self.am.len()
     }
 
-    /// Returns true if the map contains no elements.
+    /// Returns true if the cache contains no elements.
     ///
     /// # Examples
     ///
@@ -345,7 +345,7 @@ impl<K: Eq, V> Cache<K, V> {
     /// Removes a key from the cache, returning the value associated with the key if the key
     /// was previously in the cache.
     ///
-    /// The key may be any borrowed form of the map's key type, but
+    /// The key may be any borrowed form of the cache's key type, but
     /// Eq on the borrowed form *must* match those for
     /// the key type.
     ///
