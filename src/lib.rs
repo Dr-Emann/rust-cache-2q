@@ -1,4 +1,7 @@
 //! A 2Q cache
+//!
+//! This cache based on the paper entitled
+//! **[2Q: A Low Overhead High-Performance Buffer Management Replacement Algorithm](http://www.vldb.org/conf/1994/P439.PDF)**.
 #![deny(
     missing_docs,
     missing_debug_implementations, missing_copy_implementations,
@@ -16,7 +19,7 @@ use std::mem;
 use std::iter;
 use std::fmt;
 
-/// The type of items in A1in and Am. Includes a key, and the index of an item in `items`
+/// The type of items in the recent and frequent lists.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct CacheEntry<K, V> {
     key: K,
@@ -35,20 +38,21 @@ impl<'a, K, V> Into<(&'a K, &'a mut V)> for &'a mut CacheEntry<K, V> {
     }
 }
 
-/// A 2q Cache which maps keys to values
+/// A 2Q Cache which maps keys to values
 ///
-/// This cache based on the paper entitled
-/// **[2Q: A Low Overhead High-Performance Buffer Management Replacement Algorithm](http://www.vldb.org/conf/1994/P439.PDF)**.
+/// 2Q is an enhancement over an LRU cache by tracking both recent and frequently accessed entries
+/// separately. This avoids the cache being trashed by a scan of many new items: Only the recent
+/// list will be trashed.
 ///
-/// The cache is split into 3 sections, A1in, A1out and Am.
-/// A1in contains the most recently added entries.
-/// Am is an LRU cache which contains entries which are frequently accessed
-/// A1out contains the keys which have been recently evicted from the A1in cache.
+/// The cache is split into 3 sections, recent entries, frequent entries, and ghost entries
+/// recent contains the most recently added entries.
+/// frequent is an LRU cache which contains entries which are frequently accessed
+/// ghost contains the keys which have been recently evicted from the recent cache.
 ///
-/// New entries in the cache are initially placed in A1in.
-/// After A1in fills up, the oldest entry from A1in will be removed, and its key is placed in A1out.
-/// When an entry is requested and not found, but its key is found in A1out,
-/// an entry is pushed to the front of Am.
+/// New entries in the cache are initially placed in recent.
+/// After recent fills up, the oldest entry from recent will be removed, and its key is placed in
+/// ghost. When an entry is requested and not found, but its key is found in the ghost list,
+/// an entry is pushed to the front of frequent.
 ///
 /// # Examples
 ///
@@ -118,12 +122,12 @@ impl<'a, K, V> Into<(&'a K, &'a mut V)> for &'a mut CacheEntry<K, V> {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cache<K, V> {
-    am: VecDeque<CacheEntry<K, V>>,
-    a1_in: VecDeque<CacheEntry<K, V>>,
-    a1_out: VecDeque<K>,
-    k_in: usize,
-    k_out: usize,
-    k: usize,
+    frequent: VecDeque<CacheEntry<K, V>>,
+    recent: VecDeque<CacheEntry<K, V>>,
+    ghost: VecDeque<K>,
+    max_frequent: usize,
+    max_recent: usize,
+    max_ghost: usize,
 }
 
 impl<K: Eq, V> Cache<K, V> {
@@ -148,12 +152,12 @@ impl<K: Eq, V> Cache<K, V> {
         let k_out = cmp::max(1, size / 2);
         let k = size - k_in;
         Cache {
-            am: VecDeque::with_capacity(k),
-            a1_in: VecDeque::with_capacity(k_in),
-            a1_out: VecDeque::with_capacity(k_out),
-            k_in: k_in,
-            k_out: k_out,
-            k: k,
+            frequent: VecDeque::with_capacity(k),
+            recent: VecDeque::with_capacity(k_in),
+            ghost: VecDeque::with_capacity(k_out),
+            max_frequent: k,
+            max_recent: k_in,
+            max_ghost: k_out,
         }
     }
 
@@ -177,8 +181,8 @@ impl<K: Eq, V> Cache<K, V> {
         K: Borrow<Q>,
         Q: Eq,
     {
-        self.a1_in.iter().any(|entry| entry.key.borrow() == key) ||
-            self.am.iter().any(|entry| entry.key.borrow() == key)
+        self.recent.iter().any(|entry| entry.key.borrow() == key) ||
+            self.frequent.iter().any(|entry| entry.key.borrow() == key)
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -202,13 +206,13 @@ impl<K: Eq, V> Cache<K, V> {
         Q: Eq,
     {
         if let Some(&CacheEntry { ref value, .. }) =
-            self.a1_in.iter().find(|entry| entry.key.borrow() == key)
+            self.recent.iter().find(|entry| entry.key.borrow() == key)
         {
             Some(value)
-        } else if let Some(i) = self.am.iter().position(|entry| entry.key.borrow() == key) {
-            let old = self.am.remove(i).unwrap();
-            self.am.push_front(old);
-            Some(&self.am[0].value)
+        } else if let Some(i) = self.frequent.iter().position(|entry| entry.key.borrow() == key) {
+            let old = self.frequent.remove(i).unwrap();
+            self.frequent.push_front(old);
+            Some(&self.frequent[0].value)
         } else {
             None
         }
@@ -237,15 +241,15 @@ impl<K: Eq, V> Cache<K, V> {
         K: Borrow<Q>,
         Q: Eq,
     {
-        if let Some(&mut CacheEntry { ref mut value, .. }) = self.a1_in
+        if let Some(&mut CacheEntry { ref mut value, .. }) = self.recent
             .iter_mut()
             .find(|entry| entry.key.borrow() == key)
         {
             Some(value)
-        } else if let Some(i) = self.am.iter().position(|entry| entry.key.borrow() == key) {
-            let old = self.am.remove(i).unwrap();
-            self.am.push_front(old);
-            Some(&mut self.am[0].value)
+        } else if let Some(i) = self.frequent.iter().position(|entry| entry.key.borrow() == key) {
+            let old = self.frequent.remove(i).unwrap();
+            self.frequent.push_front(old);
+            Some(&mut self.frequent[0].value)
         } else {
             None
         }
@@ -303,8 +307,8 @@ impl<K: Eq, V> Cache<K, V> {
             ..
         }) = entry
         {
-            let old_entry = cache.am.remove(*i).unwrap();
-            cache.am.push_front(old_entry);
+            let old_entry = cache.frequent.remove(*i).unwrap();
+            cache.frequent.push_front(old_entry);
             *i = 0;
         }
         entry
@@ -323,7 +327,7 @@ impl<K: Eq, V> Cache<K, V> {
     /// assert_eq!(a.len(), 1);
     /// ```
     pub fn len(&self) -> usize {
-        self.a1_in.len() + self.am.len()
+        self.recent.len() + self.frequent.len()
     }
 
     /// Returns true if the cache contains no elements.
@@ -339,7 +343,7 @@ impl<K: Eq, V> Cache<K, V> {
     /// assert!(!a.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.a1_in.is_empty() && self.am.is_empty()
+        self.recent.is_empty() && self.frequent.is_empty()
     }
 
     /// Removes a key from the cache, returning the value associated with the key if the key
@@ -364,13 +368,13 @@ impl<K: Eq, V> Cache<K, V> {
         K: Borrow<Q>,
         Q: Eq,
     {
-        if let Some(i) = self.a1_in
+        if let Some(i) = self.recent
             .iter()
             .position(|entry| entry.key.borrow() == key)
         {
-            Some(self.a1_in.remove(i).unwrap().value)
-        } else if let Some(i) = self.am.iter().position(|entry| entry.key.borrow() == key) {
-            Some(self.am.remove(i).unwrap().value)
+            Some(self.recent.remove(i).unwrap().value)
+        } else if let Some(i) = self.frequent.iter().position(|entry| entry.key.borrow() == key) {
+            Some(self.frequent.remove(i).unwrap().value)
         } else {
             None
         }
@@ -389,9 +393,9 @@ impl<K: Eq, V> Cache<K, V> {
     /// assert!(a.is_empty());
     /// ```
     pub fn clear(&mut self) {
-        self.a1_in.clear();
-        self.a1_out.clear();
-        self.am.clear();
+        self.recent.clear();
+        self.ghost.clear();
+        self.frequent.clear();
     }
 
     /// Gets the given key's corresponding entry in the cache for in-place manipulation.
@@ -410,21 +414,21 @@ impl<K: Eq, V> Cache<K, V> {
     /// }
     /// ```
     pub fn peek_entry(&mut self, key: K) -> Entry<K, V> {
-        if let Some(i) = self.am.iter().position(|entry| &entry.key == &key) {
+        if let Some(i) = self.frequent.iter().position(|entry| &entry.key == &key) {
             Entry::Occupied(OccupiedEntry {
                 cache: self,
                 kind: OccupiedKind::Frequent(i),
             })
-        } else if let Some(i) = self.a1_in.iter().position(|entry| &entry.key == &key) {
+        } else if let Some(i) = self.recent.iter().position(|entry| &entry.key == &key) {
             Entry::Occupied(OccupiedEntry {
                 cache: self,
                 kind: OccupiedKind::Recent(i),
             })
-        } else if let Some(i) = self.a1_out.iter().position(|old_key| old_key == &key) {
+        } else if let Some(i) = self.ghost.iter().position(|old_key| old_key == &key) {
             Entry::Vacant(VacantEntry {
                 cache: self,
                 key: key,
-                kind: VacantKind::Remembered(i),
+                kind: VacantKind::Ghost(i),
             })
         } else {
             Entry::Vacant(VacantEntry {
@@ -454,7 +458,7 @@ impl<K: Eq, V> Cache<K, V> {
     /// ```
     pub fn iter(&self) -> Iter<K, V> {
         Iter {
-            inner: self.a1_in.iter().chain(self.am.iter()).map(Into::into),
+            inner: self.recent.iter().chain(self.frequent.iter()).map(Into::into),
         }
     }
 }
@@ -578,14 +582,14 @@ impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for OccupiedEntry<'a
 impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     fn entry(&self) -> &CacheEntry<K, V> {
         match self.kind {
-            OccupiedKind::Recent(idx) => &self.cache.a1_in[idx],
-            OccupiedKind::Frequent(idx) => &self.cache.am[idx],
+            OccupiedKind::Recent(idx) => &self.cache.recent[idx],
+            OccupiedKind::Frequent(idx) => &self.cache.frequent[idx],
         }
     }
     fn entry_mut(&mut self) -> &mut CacheEntry<K, V> {
         match self.kind {
-            OccupiedKind::Recent(idx) => &mut self.cache.a1_in[idx],
-            OccupiedKind::Frequent(idx) => &mut self.cache.am[idx],
+            OccupiedKind::Recent(idx) => &mut self.cache.recent[idx],
+            OccupiedKind::Frequent(idx) => &mut self.cache.frequent[idx],
         }
     }
 
@@ -676,8 +680,8 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// ```
     pub fn into_mut(self) -> &'a mut V {
         match self.kind {
-            OccupiedKind::Recent(idx) => &mut self.cache.a1_in[idx].value,
-            OccupiedKind::Frequent(idx) => &mut self.cache.am[idx].value,
+            OccupiedKind::Recent(idx) => &mut self.cache.recent[idx].value,
+            OccupiedKind::Frequent(idx) => &mut self.cache.frequent[idx].value,
         }
     }
 
@@ -725,11 +729,11 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     pub fn remove_entry(self) -> (K, V) {
         match self.kind {
             OccupiedKind::Recent(idx) => {
-                let entry = self.cache.a1_in.remove(idx).unwrap();
+                let entry = self.cache.recent.remove(idx).unwrap();
                 (entry.key, entry.value)
             }
             OccupiedKind::Frequent(idx) => {
-                let entry = self.cache.am.remove(idx).unwrap();
+                let entry = self.cache.frequent.remove(idx).unwrap();
                 (entry.key, entry.value)
             }
         }
@@ -775,7 +779,7 @@ impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for VacantEntry<'a, 
             .field("key", self.key())
             .field(
                 "remembered",
-                &if let VacantKind::Remembered(_) = self.kind {
+                &if let VacantKind::Ghost(_) = self.kind {
                     true
                 } else {
                     false
@@ -847,30 +851,30 @@ impl<'a, K: 'a + Eq, V: 'a> VacantEntry<'a, K, V> {
     pub fn insert(self, value: V) -> &'a mut V {
         let VacantEntry { cache, key, kind } = self;
         match kind {
-            VacantKind::Remembered(idx) => {
-                cache.a1_out.remove(idx);
-                if cache.am.len() + 1 > cache.k {
-                    cache.am.pop_back();
+            VacantKind::Ghost(idx) => {
+                cache.ghost.remove(idx);
+                if cache.frequent.len() + 1 > cache.max_frequent {
+                    cache.frequent.pop_back();
                 }
-                cache.am.push_front(CacheEntry {
+                cache.frequent.push_front(CacheEntry {
                     key: key,
                     value: value,
                 });
-                &mut cache.am[0].value
+                &mut cache.frequent[0].value
             }
             VacantKind::Unknown => {
-                if cache.a1_in.len() + 1 > cache.k_in {
-                    let old_key = cache.a1_in.pop_back().unwrap().key;
-                    if cache.a1_out.len() + 1 > cache.k_out {
-                        cache.a1_out.pop_back();
+                if cache.recent.len() + 1 > cache.max_recent {
+                    let old_key = cache.recent.pop_back().unwrap().key;
+                    if cache.ghost.len() + 1 > cache.max_ghost {
+                        cache.ghost.pop_back();
                     }
-                    cache.a1_out.push_front(old_key);
+                    cache.ghost.push_front(old_key);
                 }
-                cache.a1_in.push_front(CacheEntry {
+                cache.recent.push_front(CacheEntry {
                     key: key,
                     value: value,
                 });
-                &mut cache.a1_in[0].value
+                &mut cache.recent[0].value
             }
         }
     }
@@ -918,7 +922,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum VacantKind {
-    Remembered(usize),
+    Ghost(usize),
     Unknown,
 }
 
