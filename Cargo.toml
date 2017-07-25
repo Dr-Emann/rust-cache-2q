@@ -1,9 +1,11 @@
 [package]
 name = "cache_2q"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["Zachary Dremann <dremann@gmail.com>"]
 description = "A 2Q Cache which maps keys to values"
+
 repository = "https://github.com/Dr-Emann/rust-cache-2q"
+documentation = "https://docs.rs/cache_2q/"
 
 keywords = ["cache", "2q", "lru"]
 
