@@ -1,8 +1,12 @@
 [package]
 name = "cache_2q"
-version = "0.1.0"
+version = "0.8.0"
 authors = ["Zachary Dremann <dremann@gmail.com>"]
+description = "A 2Q Cache which maps keys to values"
+repository = "https://github.com/Dr-Emann/rust-cache-2q"
 
-[dependencies]
+keywords = ["cache", "2q", "lru"]
 
-[dev-dependencies]
+categories = ["algorithms", "caching", "data-structures"]
+
+license = "MIT/Apache-2.0"
