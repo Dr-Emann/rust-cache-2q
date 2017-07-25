@@ -7,6 +7,8 @@ description = "A 2Q Cache which maps keys to values"
 repository = "https://github.com/Dr-Emann/rust-cache-2q"
 documentation = "https://docs.rs/cache_2q/"
 
+readme = "README.md"
+
 keywords = ["cache", "2q", "lru"]
 
 categories = ["algorithms", "caching", "data-structures"]
