@@ -191,6 +191,47 @@ impl<K: Eq, V> Cache<K, V> {
     /// The key may be any borrowed form of the cache's key type, but Eq on the borrowed form
     /// must match those for the key type.
     ///
+    /// Unlike [get()], the the cache will not be updated to reflect a new access of `key`.
+    /// Because the cache is not updated, `peek()` can operate without mutable access to the cache
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_2q::Cache;
+    ///
+    /// let mut cache = Cache::new(32);
+    /// cache.insert(1, "a");
+    /// let cache = cache;
+    /// // peek doesn't require mutable access to the cache
+    /// assert_eq!(cache.peek(&1), Some(&"a"));
+    /// assert_eq!(cache.peek(&2), None);
+    /// ```
+    ///
+    /// [get()]: struct.Cache.html#method.get
+    pub fn peek<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+        where
+        K: Borrow<Q>,
+        Q: Eq,
+    {
+        if let Some(&CacheEntry { ref value, .. }) =
+            self.recent.iter().find(|entry| entry.key.borrow() == key)
+        {
+            Some(value)
+        } else if let Some(&CacheEntry { ref value, .. }) =
+            self.frequent.iter().find(|entry| entry.key.borrow() == key)
+        {
+            Some(value)
+        } else {
+            None
+        }
+
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but Eq on the borrowed form
+    /// must match those for the key type.
+    ///
     /// # Examples
     ///
     /// ```
