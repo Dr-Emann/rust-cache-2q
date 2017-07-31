@@ -44,10 +44,11 @@ impl<'a, K, V> Into<(&'a K, &'a mut V)> for &'a mut CacheEntry<K, V> {
 /// separately. This avoids the cache being trashed by a scan of many new items: Only the recent
 /// list will be trashed.
 ///
-/// The cache is split into 3 sections, recent entries, frequent entries, and ghost entries
-/// recent contains the most recently added entries.
-/// frequent is an LRU cache which contains entries which are frequently accessed
-/// ghost contains the keys which have been recently evicted from the recent cache.
+/// The cache is split into 3 sections, recent entries, frequent entries, and ghost entries.
+///
+/// * recent contains the most recently added entries.
+/// * frequent is an LRU cache which contains entries which are frequently accessed
+/// * ghost contains the keys which have been recently evicted from the recent cache.
 ///
 /// New entries in the cache are initially placed in recent.
 /// After recent fills up, the oldest entry from recent will be removed, and its key is placed in
