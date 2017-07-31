@@ -147,18 +147,24 @@ impl<K: Eq, V> Cache<K, V> {
     /// cache.insert(1, vec![1,2,3,4]);
     /// assert_eq!(*cache.get(&1).unwrap(), &[1,2,3,4]);
     /// ```
+    ///
+    /// # Panics
+    /// panics if `size` is zero. A zero-sized cache isn't very useful, and breaks some apis
+    /// (like [VacantEntry::insert], which returns a reference to the newly inserted item)
+    ///
+    /// [VacantEntry::insert]: struct.VacantEntry.html#method.insert
     pub fn new(size: usize) -> Cache<K, V> {
-        assert!(size >= 2);
-        let k_in = cmp::max(1, size / 4);
-        let k_out = cmp::max(1, size / 2);
-        let k = size - k_in;
+        assert!(size > 0);
+        let max_recent = cmp::max(1, size / 4);
+        let max_frequent = size - max_recent;
+        let max_ghost = size / 2;
         Cache {
-            frequent: VecDeque::with_capacity(k),
-            recent: VecDeque::with_capacity(k_in),
-            ghost: VecDeque::with_capacity(k_out),
-            max_frequent: k,
-            max_recent: k_in,
-            max_ghost: k_out,
+            frequent: VecDeque::with_capacity(max_frequent),
+            recent: VecDeque::with_capacity(max_recent),
+            ghost: VecDeque::with_capacity(max_ghost),
+            max_frequent: max_frequent,
+            max_recent: max_recent,
+            max_ghost: max_ghost,
         }
     }
 
@@ -906,11 +912,12 @@ impl<'a, K: 'a + Eq, V: 'a> VacantEntry<'a, K, V> {
             }
             VacantKind::Unknown => {
                 if cache.recent.len() + 1 > cache.max_recent {
-                    let old_key = cache.recent.pop_back().unwrap().key;
-                    if cache.ghost.len() + 1 > cache.max_ghost {
-                        cache.ghost.pop_back();
+                    if let Some(CacheEntry {key: old_key, ..}) = cache.recent.pop_back() {
+                        if cache.ghost.len() + 1 > cache.max_ghost {
+                            cache.ghost.pop_back();
+                        }
+                        cache.ghost.push_front(old_key);
                     }
-                    cache.ghost.push_front(old_key);
                 }
                 cache.recent.push_front(CacheEntry {
                     key: key,
@@ -992,5 +999,21 @@ mod tests {
         cache.entry("hi".to_string()).or_insert(0);
         cache.entry("there".to_string()).or_insert(0);
         assert_eq!(*cache.get("hi").unwrap(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn empty_cache() {
+        Cache::<(), ()>::new(0);
+    }
+
+    #[test]
+    fn size_1_cache() {
+        let mut cache = Cache::new(1);
+        cache.insert(100, "value");
+        assert_eq!(cache.get(&100), Some(&"value"));
+        cache.insert(200, "other");
+        assert_eq!(cache.get(&200), Some(&"other"));
+        assert_eq!(cache.get(&100), None);
     }
 }

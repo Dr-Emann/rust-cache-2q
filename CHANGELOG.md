@@ -1,5 +1,8 @@
 # [unreleased]
 
+## Changed
+* The minimum size of a Cache is now 1, instead of 2
+
 # 0.8.3
 
 ## Added
