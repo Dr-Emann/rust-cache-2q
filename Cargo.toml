@@ -1,6 +1,6 @@
 [package]
 name = "cache_2q"
-version = "0.8.3"
+version = "0.8.4"
 authors = ["Zachary Dremann <dremann@gmail.com>"]
 description = "A 2Q Cache which maps keys to values"
 
