@@ -6,10 +6,10 @@ A 2Q Cache which maps keys to values
 separately. This avoids the cache being trashed by a scan of many new items: Only the recent
 list will be trashed.
 
-The cache is split into 3 sections, recent entries, frequent entries, and ghost entries
-recent contains the most recently added entries.
-frequent is an LRU cache which contains entries which are frequently accessed
-ghost contains the keys which have been recently evicted from the recent cache.
+The cache is split into 3 sections, recent entries, frequent entries, and ghost entries.
+Recent contains the most recently added entries.
+Frequent is an LRU cache which contains entries which are frequently accessed.
+Ghost contains the keys which have been recently evicted from the recent cache.
 
 New entries in the cache are initially placed in recent.
 After recent fills up, the oldest entry from recent will be removed, and its key is placed in
