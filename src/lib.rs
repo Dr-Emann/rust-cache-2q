@@ -9,32 +9,15 @@
 )]
 #![cfg_attr(feature = "cargo-clippy", warn(clippy_pedantic))]
 
+extern crate linked_hash_map;
+
 use std::borrow::Borrow;
 use std::cmp;
-use std::collections::vec_deque;
-use std::collections::VecDeque;
 use std::fmt;
+use std::hash::Hash;
 use std::iter;
-use std::mem;
 
-/// The type of items in the recent and frequent lists.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct CacheEntry<K, V> {
-    key: K,
-    value: V,
-}
-
-impl<'a, K, V> Into<(&'a K, &'a V)> for &'a CacheEntry<K, V> {
-    fn into(self) -> (&'a K, &'a V) {
-        (&self.key, &self.value)
-    }
-}
-
-impl<'a, K, V> Into<(&'a K, &'a mut V)> for &'a mut CacheEntry<K, V> {
-    fn into(self) -> (&'a K, &'a mut V) {
-        (&self.key, &mut self.value)
-    }
-}
+use linked_hash_map::LinkedHashMap;
 
 /// A 2Q Cache which maps keys to values
 ///
@@ -120,16 +103,16 @@ impl<'a, K, V> Into<(&'a K, &'a mut V)> for &'a mut CacheEntry<K, V> {
 /// *stat += random_stat_buff();
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cache<K, V> {
-    recent: VecDeque<CacheEntry<K, V>>,
-    frequent: VecDeque<CacheEntry<K, V>>,
-    ghost: VecDeque<K>,
+pub struct Cache<K: Eq + Hash, V> {
+    recent: LinkedHashMap<K, V>,
+    frequent: LinkedHashMap<K, V>,
+    ghost: LinkedHashMap<K, ()>,
     max_frequent: usize,
     max_recent: usize,
     max_ghost: usize,
 }
 
-impl<K: Eq, V> Cache<K, V> {
+impl<K: Eq + Hash, V> Cache<K, V> {
     /// Creates an empty cache, with the specified size
     ///
     /// # Notes
@@ -157,9 +140,9 @@ impl<K: Eq, V> Cache<K, V> {
         let max_frequent = size - max_recent;
         let max_ghost = size / 2;
         Self {
-            recent: VecDeque::with_capacity(max_recent),
-            frequent: VecDeque::with_capacity(max_frequent),
-            ghost: VecDeque::with_capacity(max_ghost),
+            recent: LinkedHashMap::with_capacity(max_recent),
+            frequent: LinkedHashMap::with_capacity(max_frequent),
+            ghost: LinkedHashMap::with_capacity(max_ghost),
             max_frequent,
             max_recent,
             max_ghost,
@@ -184,10 +167,9 @@ impl<K: Eq, V> Cache<K, V> {
     pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + Hash,
     {
-        self.recent.iter().any(|entry| entry.key.borrow() == key)
-            || self.frequent.iter().any(|entry| entry.key.borrow() == key)
+        self.recent.contains_key(key) || self.frequent.contains_key(key)
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -215,19 +197,9 @@ impl<K: Eq, V> Cache<K, V> {
     pub fn peek<Q: ?Sized>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + Hash,
     {
-        if let Some(&CacheEntry { ref value, .. }) =
-            self.recent.iter().find(|entry| entry.key.borrow() == key)
-        {
-            Some(value)
-        } else if let Some(&CacheEntry { ref value, .. }) =
-            self.frequent.iter().find(|entry| entry.key.borrow() == key)
-        {
-            Some(value)
-        } else {
-            None
-        }
+        self.recent.get(key).or_else(|| self.frequent.get(key))
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -248,22 +220,9 @@ impl<K: Eq, V> Cache<K, V> {
     pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + Hash,
     {
-        if let Some(&CacheEntry { ref value, .. }) =
-            self.recent.iter().find(|entry| entry.key.borrow() == key)
-        {
-            Some(value)
-        } else if let Some(i) = self.frequent
-            .iter()
-            .position(|entry| entry.key.borrow() == key)
-        {
-            let old = self.frequent.remove(i).unwrap();
-            self.frequent.push_front(old);
-            Some(&self.frequent[0].value)
-        } else {
-            None
-        }
+        self.get_mut(key).map(|x| &*x)
     }
 
     /// Returns a mutable reference to the value corresponding to the key.
@@ -287,23 +246,12 @@ impl<K: Eq, V> Cache<K, V> {
     pub fn get_mut<Q: ?Sized>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + Hash,
     {
-        if let Some(&mut CacheEntry { ref mut value, .. }) = self.recent
-            .iter_mut()
-            .find(|entry| entry.key.borrow() == key)
-        {
-            Some(value)
-        } else if let Some(i) = self.frequent
-            .iter()
-            .position(|entry| entry.key.borrow() == key)
-        {
-            let old = self.frequent.remove(i).unwrap();
-            self.frequent.push_front(old);
-            Some(&mut self.frequent[0].value)
-        } else {
-            None
+        if let Some(value) = self.recent.get_refresh(key) {
+            return Some(value);
         }
+        self.frequent.get_refresh(key)
     }
 
     /// Inserts a key-value pair into the cache.
@@ -337,6 +285,57 @@ impl<K: Eq, V> Cache<K, V> {
     }
 
     /// Gets the given key's corresponding entry in the cache for in-place manipulation.
+    /// The LRU portion of the cache is not updated
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_2q::Cache;
+    ///
+    /// let mut stringified = Cache::new(8);
+    ///
+    /// for &i in &[1, 2, 5, 1, 2, 8, 1, 2, 102, 25, 1092, 1, 2, 82, 10, 1095] {
+    ///     let string = stringified.peek_entry(i).or_insert_with(|| i.to_string());
+    ///     assert_eq!(string, &i.to_string());
+    /// }
+    /// ```
+    pub fn peek_entry(&mut self, key: K) -> Entry<K, V> {
+        if self.recent.contains_key(&key) {
+            return Entry::Occupied(OccupiedEntry {
+                kind: OccupiedKind::Recent,
+                entry: if let linked_hash_map::Entry::Occupied(entry) = self.recent.entry(key) {
+                    entry
+                } else {
+                    panic!("frequent contains key, but no entry");
+                },
+            });
+        }
+        if self.frequent.contains_key(&key) {
+            return Entry::Occupied(OccupiedEntry {
+                kind: OccupiedKind::Frequent,
+                entry: if let linked_hash_map::Entry::Occupied(entry) = self.frequent.entry(key) {
+                    entry
+                } else {
+                    panic!("frequent contains key, but no entry");
+                },
+            });
+        }
+        if self.ghost.contains_key(&key) {
+            return Entry::Vacant(VacantEntry {
+                cache: self,
+                kind: VacantKind::Ghost,
+                key,
+            });
+        }
+
+        Entry::Vacant(VacantEntry {
+            cache: self,
+            kind: VacantKind::Unknown,
+            key,
+        })
+    }
+
+    /// Gets the given key's corresponding entry in the cache for in-place manipulation.
     ///
     /// # Examples
     ///
@@ -351,18 +350,39 @@ impl<K: Eq, V> Cache<K, V> {
     /// }
     /// ```
     pub fn entry(&mut self, key: K) -> Entry<K, V> {
-        let mut entry = self.peek_entry(key);
-        if let Entry::Occupied(OccupiedEntry {
-            ref mut cache,
-            kind: OccupiedKind::Frequent(ref mut i),
-            ..
-        }) = entry
-        {
-            let old_entry = cache.frequent.remove(*i).unwrap();
-            cache.frequent.push_front(old_entry);
-            *i = 0;
+        if self.recent.get_refresh(&key).is_some() {
+            return Entry::Occupied(OccupiedEntry {
+                kind: OccupiedKind::Recent,
+                entry: if let linked_hash_map::Entry::Occupied(entry) = self.recent.entry(key) {
+                    entry
+                } else {
+                    panic!("recent contains key, but no entry");
+                },
+            });
         }
-        entry
+        if self.frequent.get_refresh(&key).is_some() {
+            return Entry::Occupied(OccupiedEntry {
+                kind: OccupiedKind::Frequent,
+                entry: if let linked_hash_map::Entry::Occupied(entry) = self.frequent.entry(key) {
+                    entry
+                } else {
+                    panic!("frequent contains key, but no entry");
+                },
+            });
+        }
+        if self.ghost.contains_key(&key) {
+            return Entry::Vacant(VacantEntry {
+                cache: self,
+                kind: VacantKind::Ghost,
+                key,
+            });
+        }
+
+        Entry::Vacant(VacantEntry {
+            cache: self,
+            kind: VacantKind::Unknown,
+            key,
+        })
     }
 
     /// Returns the number of entries currently in the cache.
@@ -417,21 +437,11 @@ impl<K: Eq, V> Cache<K, V> {
     pub fn remove<Q: ?Sized>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + Hash,
     {
-        if let Some(i) = self.recent
-            .iter()
-            .position(|entry| entry.key.borrow() == key)
-        {
-            Some(self.recent.remove(i).unwrap().value)
-        } else if let Some(i) = self.frequent
-            .iter()
-            .position(|entry| entry.key.borrow() == key)
-        {
-            Some(self.frequent.remove(i).unwrap().value)
-        } else {
-            None
-        }
+        self.recent
+            .remove(key)
+            .or_else(|| self.frequent.remove(key))
     }
 
     /// Clears the cache, removing all key-value pairs. Keeps the allocated memory for reuse.
@@ -450,47 +460,6 @@ impl<K: Eq, V> Cache<K, V> {
         self.recent.clear();
         self.ghost.clear();
         self.frequent.clear();
-    }
-
-    /// Gets the given key's corresponding entry in the cache for in-place manipulation.
-    /// The LRU portion of the cache is not updated
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_2q::Cache;
-    ///
-    /// let mut stringified = Cache::new(8);
-    ///
-    /// for &i in &[1, 2, 5, 1, 2, 8, 1, 2, 102, 25, 1092, 1, 2, 82, 10, 1095] {
-    ///     let string = stringified.peek_entry(i).or_insert_with(|| i.to_string());
-    ///     assert_eq!(string, &i.to_string());
-    /// }
-    /// ```
-    pub fn peek_entry(&mut self, key: K) -> Entry<K, V> {
-        if let Some(i) = self.frequent.iter().position(|entry| entry.key == key) {
-            Entry::Occupied(OccupiedEntry {
-                cache: self,
-                kind: OccupiedKind::Frequent(i),
-            })
-        } else if let Some(i) = self.recent.iter().position(|entry| entry.key == key) {
-            Entry::Occupied(OccupiedEntry {
-                cache: self,
-                kind: OccupiedKind::Recent(i),
-            })
-        } else if let Some(i) = self.ghost.iter().position(|old_key| old_key == &key) {
-            Entry::Vacant(VacantEntry {
-                cache: self,
-                kind: VacantKind::Ghost(i),
-                key,
-            })
-        } else {
-            Entry::Vacant(VacantEntry {
-                cache: self,
-                kind: VacantKind::Unknown,
-                key,
-            })
-        }
     }
 
     /// An iterator visiting all key-value pairs in arbitrary order.
@@ -512,15 +481,12 @@ impl<K: Eq, V> Cache<K, V> {
     /// ```
     pub fn iter(&self) -> Iter<K, V> {
         Iter {
-            inner: self.recent
-                .iter()
-                .chain(self.frequent.iter())
-                .map(Into::into),
+            inner: self.recent.iter().chain(self.frequent.iter()),
         }
     }
 }
 
-impl<'a, K: 'a + Eq, V: 'a> IntoIterator for &'a Cache<K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a> IntoIterator for &'a Cache<K, V> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
     fn into_iter(self) -> Iter<'a, K, V> {
@@ -531,14 +497,14 @@ impl<'a, K: 'a + Eq, V: 'a> IntoIterator for &'a Cache<K, V> {
 /// A view into a single entry in a cache, which may either be vacant or occupied.
 ///
 /// This enum is constructed from the entry method on Cache.
-pub enum Entry<'a, K: 'a, V: 'a> {
+pub enum Entry<'a, K: 'a + Eq + Hash, V: 'a> {
     /// An occupied entry
     Occupied(OccupiedEntry<'a, K, V>),
     /// An vacant entry
     Vacant(VacantEntry<'a, K, V>),
 }
 
-impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for Entry<'a, K, V> {
+impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug for Entry<'a, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Entry::Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
@@ -547,7 +513,7 @@ impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for Entry<'a, K, V> 
     }
 }
 
-impl<'a, K: 'a + Eq, V: 'a> Entry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a> Entry<'a, K, V> {
     /// Returns a reference to this entry's key.
     ///
     /// # Examples
@@ -614,19 +580,21 @@ impl<'a, K: 'a + Eq, V: 'a> Entry<'a, K, V> {
 ///
 /// [`Cache`]: struct.Cache.html
 /// [`Entry`]: enum.Entry.html
-pub struct OccupiedEntry<'a, K: 'a, V: 'a> {
-    cache: &'a mut Cache<K, V>,
+pub struct OccupiedEntry<'a, K: 'a + Eq + Hash, V: 'a> {
     kind: OccupiedKind,
+    entry: linked_hash_map::OccupiedEntry<'a, K, V>,
 }
 
-impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for OccupiedEntry<'a, K, V> {
+impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug
+    for OccupiedEntry<'a, K, V>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("OccupiedEntry")
             .field("key", self.key())
             .field("value", self.get())
             .field(
                 "kind",
-                &if let OccupiedKind::Frequent(_) = self.kind {
+                &if self.kind == OccupiedKind::Frequent {
                     "frequent"
                 } else {
                     "recent"
@@ -636,20 +604,7 @@ impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for OccupiedEntry<'a
     }
 }
 
-impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
-    fn entry(&self) -> &CacheEntry<K, V> {
-        match self.kind {
-            OccupiedKind::Recent(idx) => &self.cache.recent[idx],
-            OccupiedKind::Frequent(idx) => &self.cache.frequent[idx],
-        }
-    }
-    fn entry_mut(&mut self) -> &mut CacheEntry<K, V> {
-        match self.kind {
-            OccupiedKind::Recent(idx) => &mut self.cache.recent[idx],
-            OccupiedKind::Frequent(idx) => &mut self.cache.frequent[idx],
-        }
-    }
-
+impl<'a, K: 'a + Eq + Hash, V: 'a> OccupiedEntry<'a, K, V> {
     /// Gets a reference to the key in the entry.
     ///
     /// # Examples
@@ -669,7 +624,7 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// }
     /// ```
     pub fn key(&self) -> &K {
-        &self.entry().key
+        self.entry.key()
     }
 
     /// Gets a reference to the value in the entry.
@@ -689,7 +644,7 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// }
     /// ```
     pub fn get(&self) -> &V {
-        &self.entry().value
+        self.entry.get()
     }
 
     /// Gets a mutable reference to the value in the entry.
@@ -712,7 +667,7 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// assert_eq!(*cache.get("poneyland").unwrap(), 22);
     /// ```
     pub fn get_mut(&mut self) -> &mut V {
-        &mut self.entry_mut().value
+        self.entry.get_mut()
     }
 
     /// Converts the OccupiedEntry into a mutable reference to the value in the entry
@@ -736,10 +691,7 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// assert_eq!(*cache.get("poneyland").unwrap(), 22);
     /// ```
     pub fn into_mut(self) -> &'a mut V {
-        match self.kind {
-            OccupiedKind::Recent(idx) => &mut self.cache.recent[idx].value,
-            OccupiedKind::Frequent(idx) => &mut self.cache.frequent[idx].value,
-        }
+        self.entry.into_mut()
     }
 
     /// Sets the value of the entry, and returns the entry's old value.
@@ -761,39 +713,7 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// assert_eq!(*cache.get("poneyland").unwrap(), 15);
     /// ```
     pub fn insert(&mut self, value: V) -> V {
-        mem::replace(self.get_mut(), value)
-    }
-
-    /// Take the ownership of the key and value from the cache.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_2q::{Cache, Entry};
-    ///
-    /// let mut cache: Cache<&str, u32> = Cache::new(8);
-    /// cache.entry("poneyland").or_insert(12);
-    ///
-    /// if let Entry::Occupied(o) = cache.entry("poneyland") {
-    ///     // We delete the entry from the cache.
-    ///     o.remove_entry();
-    /// } else {
-    ///     panic!("Entry should be occupied");
-    /// }
-    ///
-    /// assert_eq!(cache.contains_key("poneyland"), false);
-    /// ```
-    pub fn remove_entry(self) -> (K, V) {
-        match self.kind {
-            OccupiedKind::Recent(idx) => {
-                let entry = self.cache.recent.remove(idx).unwrap();
-                (entry.key, entry.value)
-            }
-            OccupiedKind::Frequent(idx) => {
-                let entry = self.cache.frequent.remove(idx).unwrap();
-                (entry.key, entry.value)
-            }
-        }
+        self.entry.insert(value)
     }
 
     /// Takes the value out of the entry, and returns it.
@@ -815,7 +735,7 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
     /// assert_eq!(cache.contains_key("poneyland"), false);
     /// ```
     pub fn remove(self) -> V {
-        self.remove_entry().1
+        self.entry.remove()
     }
 }
 
@@ -824,29 +744,22 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
 ///
 /// [`Cache`]: struct.Cache.html
 /// [`Entry`]: enum.Entry.html
-pub struct VacantEntry<'a, K: 'a, V: 'a> {
+pub struct VacantEntry<'a, K: 'a + Eq + Hash, V: 'a> {
     cache: &'a mut Cache<K, V>,
     kind: VacantKind,
     key: K,
 }
 
-impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for VacantEntry<'a, K, V> {
+impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug for VacantEntry<'a, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("VacantEntry")
             .field("key", self.key())
-            .field(
-                "remembered",
-                &if let VacantKind::Ghost(_) = self.kind {
-                    true
-                } else {
-                    false
-                },
-            )
+            .field("remembered", &(self.kind == VacantKind::Ghost))
             .finish()
     }
 }
 
-impl<'a, K: 'a, V: 'a> VacantEntry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
     /// Gets a reference to the key that would be used when inserting a value
     /// through the `VacantEntry`.
     ///
@@ -887,7 +800,7 @@ impl<'a, K: 'a, V: 'a> VacantEntry<'a, K, V> {
     }
 }
 
-impl<'a, K: 'a + Eq, V: 'a> VacantEntry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
     /// Sets the value of the entry with the VacantEntry's key,
     /// and returns a mutable reference to it.
     ///
@@ -908,33 +821,28 @@ impl<'a, K: 'a + Eq, V: 'a> VacantEntry<'a, K, V> {
     pub fn insert(self, value: V) -> &'a mut V {
         let VacantEntry { cache, key, kind } = self;
         match kind {
-            VacantKind::Ghost(idx) => {
-                cache.ghost.remove(idx);
+            VacantKind::Ghost => {
+                cache.ghost.remove(&key).expect("No ghost with key");
                 if cache.frequent.len() + 1 > cache.max_frequent {
-                    cache.frequent.pop_back();
+                    cache.frequent.pop_front();
                 }
-                cache.frequent.push_front(CacheEntry { key, value });
-                &mut cache.frequent[0].value
+                cache.frequent.entry(key).or_insert(value)
             }
             VacantKind::Unknown => {
                 if cache.recent.len() + 1 > cache.max_recent {
-                    if let Some(CacheEntry { key: old_key, .. }) = cache.recent.pop_back() {
-                        if cache.ghost.len() + 1 > cache.max_ghost {
-                            cache.ghost.pop_back();
-                        }
-                        cache.ghost.push_front(old_key);
+                    let (old_key, _) = cache.recent.pop_front().unwrap();
+                    if cache.ghost.len() + 1 > cache.max_ghost {
+                        cache.ghost.pop_back();
                     }
+                    cache.ghost.insert(old_key, ());
                 }
-                cache.recent.push_front(CacheEntry { key, value });
-                &mut cache.recent[0].value
+                cache.recent.entry(key).or_insert(value)
             }
         }
     }
 }
-type InnerIter<'a, K, V> = iter::Map<
-    iter::Chain<vec_deque::Iter<'a, CacheEntry<K, V>>, vec_deque::Iter<'a, CacheEntry<K, V>>>,
-    fn(&'a CacheEntry<K, V>) -> (&K, &V),
->;
+type InnerIter<'a, K, V> =
+    iter::Chain<linked_hash_map::Iter<'a, K, V>, linked_hash_map::Iter<'a, K, V>>;
 
 /// An iterator over the entries of a `Cache`.
 ///
@@ -975,14 +883,14 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum VacantKind {
-    Ghost(usize),
+    Ghost,
     Unknown,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum OccupiedKind {
-    Recent(usize),
-    Frequent(usize),
+    Recent,
+    Frequent,
 }
 
 #[cfg(test)]
@@ -1018,6 +926,12 @@ mod tests {
         assert_eq!(cache.get(&100), Some(&"value"));
         cache.insert(200, "other");
         assert_eq!(cache.get(&200), Some(&"other"));
+        assert_eq!(cache.get(&100), None);
+        cache.insert(10, "value");
+        assert_eq!(cache.get(&10), Some(&"value"));
+        cache.insert(20, "other");
+        assert_eq!(cache.get(&20), Some(&"other"));
+        assert_eq!(cache.get(&10), None);
         assert_eq!(cache.get(&100), None);
     }
 }
