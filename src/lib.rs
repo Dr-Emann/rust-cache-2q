@@ -3,21 +3,19 @@
 //! This cache based on the paper entitled
 //! **[2Q: A Low Overhead High-Performance Buffer Management Replacement Algorithm](http://www.vldb.org/conf/1994/P439.PDF)**.
 #![deny(
-    missing_docs,
-    missing_debug_implementations, missing_copy_implementations,
-    trivial_casts, trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces, unused_qualifications
- )]
+    missing_docs, missing_debug_implementations, missing_copy_implementations, trivial_casts,
+    trivial_numeric_casts, unsafe_code, unstable_features, unused_import_braces,
+    unused_qualifications
+)]
+#![cfg_attr(feature = "cargo-clippy", warn(clippy_pedantic))]
 
-use std::collections::VecDeque;
-use std::collections::vec_deque;
 use std::borrow::Borrow;
 use std::cmp;
-use std::mem;
-use std::iter;
+use std::collections::vec_deque;
+use std::collections::VecDeque;
 use std::fmt;
+use std::iter;
+use std::mem;
 
 /// The type of items in the recent and frequent lists.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -123,8 +121,8 @@ impl<'a, K, V> Into<(&'a K, &'a mut V)> for &'a mut CacheEntry<K, V> {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cache<K, V> {
-    frequent: VecDeque<CacheEntry<K, V>>,
     recent: VecDeque<CacheEntry<K, V>>,
+    frequent: VecDeque<CacheEntry<K, V>>,
     ghost: VecDeque<K>,
     max_frequent: usize,
     max_recent: usize,
@@ -153,18 +151,18 @@ impl<K: Eq, V> Cache<K, V> {
     /// (like [VacantEntry::insert], which returns a reference to the newly inserted item)
     ///
     /// [VacantEntry::insert]: struct.VacantEntry.html#method.insert
-    pub fn new(size: usize) -> Cache<K, V> {
+    pub fn new(size: usize) -> Self {
         assert!(size > 0);
         let max_recent = cmp::max(1, size / 4);
         let max_frequent = size - max_recent;
         let max_ghost = size / 2;
-        Cache {
-            frequent: VecDeque::with_capacity(max_frequent),
+        Self {
             recent: VecDeque::with_capacity(max_recent),
+            frequent: VecDeque::with_capacity(max_frequent),
             ghost: VecDeque::with_capacity(max_ghost),
-            max_frequent: max_frequent,
-            max_recent: max_recent,
-            max_ghost: max_ghost,
+            max_frequent,
+            max_recent,
+            max_ghost,
         }
     }
 
@@ -188,8 +186,8 @@ impl<K: Eq, V> Cache<K, V> {
         K: Borrow<Q>,
         Q: Eq,
     {
-        self.recent.iter().any(|entry| entry.key.borrow() == key) ||
-            self.frequent.iter().any(|entry| entry.key.borrow() == key)
+        self.recent.iter().any(|entry| entry.key.borrow() == key)
+            || self.frequent.iter().any(|entry| entry.key.borrow() == key)
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -215,7 +213,7 @@ impl<K: Eq, V> Cache<K, V> {
     ///
     /// [get()]: struct.Cache.html#method.get
     pub fn peek<Q: ?Sized>(&self, key: &Q) -> Option<&V>
-        where
+    where
         K: Borrow<Q>,
         Q: Eq,
     {
@@ -230,7 +228,6 @@ impl<K: Eq, V> Cache<K, V> {
         } else {
             None
         }
-
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -257,7 +254,10 @@ impl<K: Eq, V> Cache<K, V> {
             self.recent.iter().find(|entry| entry.key.borrow() == key)
         {
             Some(value)
-        } else if let Some(i) = self.frequent.iter().position(|entry| entry.key.borrow() == key) {
+        } else if let Some(i) = self.frequent
+            .iter()
+            .position(|entry| entry.key.borrow() == key)
+        {
             let old = self.frequent.remove(i).unwrap();
             self.frequent.push_front(old);
             Some(&self.frequent[0].value)
@@ -294,7 +294,10 @@ impl<K: Eq, V> Cache<K, V> {
             .find(|entry| entry.key.borrow() == key)
         {
             Some(value)
-        } else if let Some(i) = self.frequent.iter().position(|entry| entry.key.borrow() == key) {
+        } else if let Some(i) = self.frequent
+            .iter()
+            .position(|entry| entry.key.borrow() == key)
+        {
             let old = self.frequent.remove(i).unwrap();
             self.frequent.push_front(old);
             Some(&mut self.frequent[0].value)
@@ -362,7 +365,7 @@ impl<K: Eq, V> Cache<K, V> {
         entry
     }
 
-    /// Returns the number of entries currenly in the cache.
+    /// Returns the number of entries currently in the cache.
     ///
     /// # Examples
     ///
@@ -421,7 +424,10 @@ impl<K: Eq, V> Cache<K, V> {
             .position(|entry| entry.key.borrow() == key)
         {
             Some(self.recent.remove(i).unwrap().value)
-        } else if let Some(i) = self.frequent.iter().position(|entry| entry.key.borrow() == key) {
+        } else if let Some(i) = self.frequent
+            .iter()
+            .position(|entry| entry.key.borrow() == key)
+        {
             Some(self.frequent.remove(i).unwrap().value)
         } else {
             None
@@ -462,12 +468,12 @@ impl<K: Eq, V> Cache<K, V> {
     /// }
     /// ```
     pub fn peek_entry(&mut self, key: K) -> Entry<K, V> {
-        if let Some(i) = self.frequent.iter().position(|entry| &entry.key == &key) {
+        if let Some(i) = self.frequent.iter().position(|entry| entry.key == key) {
             Entry::Occupied(OccupiedEntry {
                 cache: self,
                 kind: OccupiedKind::Frequent(i),
             })
-        } else if let Some(i) = self.recent.iter().position(|entry| &entry.key == &key) {
+        } else if let Some(i) = self.recent.iter().position(|entry| entry.key == key) {
             Entry::Occupied(OccupiedEntry {
                 cache: self,
                 kind: OccupiedKind::Recent(i),
@@ -475,14 +481,14 @@ impl<K: Eq, V> Cache<K, V> {
         } else if let Some(i) = self.ghost.iter().position(|old_key| old_key == &key) {
             Entry::Vacant(VacantEntry {
                 cache: self,
-                key: key,
                 kind: VacantKind::Ghost(i),
+                key,
             })
         } else {
             Entry::Vacant(VacantEntry {
                 cache: self,
-                key: key,
                 kind: VacantKind::Unknown,
+                key,
             })
         }
     }
@@ -506,7 +512,10 @@ impl<K: Eq, V> Cache<K, V> {
     /// ```
     pub fn iter(&self) -> Iter<K, V> {
         Iter {
-            inner: self.recent.iter().chain(self.frequent.iter()).map(Into::into),
+            inner: self.recent
+                .iter()
+                .chain(self.frequent.iter())
+                .map(Into::into),
         }
     }
 }
@@ -817,8 +826,8 @@ impl<'a, K: 'a, V: 'a> OccupiedEntry<'a, K, V> {
 /// [`Entry`]: enum.Entry.html
 pub struct VacantEntry<'a, K: 'a, V: 'a> {
     cache: &'a mut Cache<K, V>,
-    key: K,
     kind: VacantKind,
+    key: K,
 }
 
 impl<'a, K: 'a + fmt::Debug, V: 'a + fmt::Debug> fmt::Debug for VacantEntry<'a, K, V> {
@@ -904,30 +913,28 @@ impl<'a, K: 'a + Eq, V: 'a> VacantEntry<'a, K, V> {
                 if cache.frequent.len() + 1 > cache.max_frequent {
                     cache.frequent.pop_back();
                 }
-                cache.frequent.push_front(CacheEntry {
-                    key: key,
-                    value: value,
-                });
+                cache.frequent.push_front(CacheEntry { key, value });
                 &mut cache.frequent[0].value
             }
             VacantKind::Unknown => {
                 if cache.recent.len() + 1 > cache.max_recent {
-                    if let Some(CacheEntry {key: old_key, ..}) = cache.recent.pop_back() {
+                    if let Some(CacheEntry { key: old_key, .. }) = cache.recent.pop_back() {
                         if cache.ghost.len() + 1 > cache.max_ghost {
                             cache.ghost.pop_back();
                         }
                         cache.ghost.push_front(old_key);
                     }
                 }
-                cache.recent.push_front(CacheEntry {
-                    key: key,
-                    value: value,
-                });
+                cache.recent.push_front(CacheEntry { key, value });
                 &mut cache.recent[0].value
             }
         }
     }
 }
+type InnerIter<'a, K, V> = iter::Map<
+    iter::Chain<vec_deque::Iter<'a, CacheEntry<K, V>>, vec_deque::Iter<'a, CacheEntry<K, V>>>,
+    fn(&'a CacheEntry<K, V>) -> (&K, &V),
+>;
 
 /// An iterator over the entries of a `Cache`.
 ///
@@ -937,10 +944,7 @@ impl<'a, K: 'a + Eq, V: 'a> VacantEntry<'a, K, V> {
 /// [`iter`]: struct.Cache.html#method.iter
 /// [`Cache`]: struct.Cache.html
 pub struct Iter<'a, K: 'a, V: 'a> {
-    inner: iter::Map<
-        iter::Chain<vec_deque::Iter<'a, CacheEntry<K, V>>, vec_deque::Iter<'a, CacheEntry<K, V>>>,
-        fn(&'a CacheEntry<K, V>) -> (&K, &V),
-    >,
+    inner: InnerIter<'a, K, V>,
 }
 
 impl<'a, K: 'a, V: 'a> Clone for Iter<'a, K, V> {
