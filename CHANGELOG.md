@@ -1,3 +1,14 @@
+# 0.10.0
+
+## Added
+* `VacantEntry::is_remembered()` to test if a vacant entry is remembered, and will become a 
+frequent entry if inserted
+
+## Changed
+* `Cache::get()` removed
+* `Cache::get_mut()` renamed to `Cache::get()`
+* `Cache::new(size)` frequent size and recent size both are `size`, and `size * 4` ghosts are kept
+
 # 0.9.0
 
 ## Changed

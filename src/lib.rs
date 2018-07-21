@@ -3,8 +3,14 @@
 //! This cache based on the paper entitled
 //! **[2Q: A Low Overhead High-Performance Buffer Management Replacement Algorithm](http://www.vldb.org/conf/1994/P439.PDF)**.
 #![deny(
-    missing_docs, missing_debug_implementations, missing_copy_implementations, trivial_casts,
-    trivial_numeric_casts, unsafe_code, unstable_features, unused_import_braces,
+    missing_docs,
+    missing_debug_implementations,
+    missing_copy_implementations,
+    trivial_casts,
+    trivial_numeric_casts,
+    unsafe_code,
+    unstable_features,
+    unused_import_braces,
     unused_qualifications
 )]
 #![cfg_attr(feature = "cargo-clippy", warn(clippy_pedantic))]
@@ -12,7 +18,6 @@
 extern crate linked_hash_map;
 
 use std::borrow::Borrow;
-use std::cmp;
 use std::fmt;
 use std::hash::Hash;
 use std::iter;
@@ -107,17 +112,16 @@ pub struct Cache<K: Eq + Hash, V> {
     recent: LinkedHashMap<K, V>,
     frequent: LinkedHashMap<K, V>,
     ghost: LinkedHashMap<K, ()>,
-    max_frequent: usize,
-    max_recent: usize,
-    max_ghost: usize,
+    size: usize,
+    ghost_size: usize,
 }
 
 impl<K: Eq + Hash, V> Cache<K, V> {
     /// Creates an empty cache, with the specified size
     ///
-    /// # Notes
-    /// `size` defines the maximum number of entries, but there can be
-    /// an additional `size / 2` instances of `K`
+    /// The returned cache will have enough room for `size` recent entries,
+    /// and `size` frequent entries. In addition, up to `size * 4` keys will be kept
+    /// as remembered items
     ///
     /// # Examples
     ///
@@ -136,16 +140,13 @@ impl<K: Eq + Hash, V> Cache<K, V> {
     /// [VacantEntry::insert]: struct.VacantEntry.html#method.insert
     pub fn new(size: usize) -> Self {
         assert!(size > 0);
-        let max_recent = cmp::max(1, size / 4);
-        let max_frequent = size - max_recent;
-        let max_ghost = size / 2;
+        let ghost_size = size * 4;
         Self {
-            recent: LinkedHashMap::with_capacity(max_recent),
-            frequent: LinkedHashMap::with_capacity(max_frequent),
-            ghost: LinkedHashMap::with_capacity(max_ghost),
-            max_frequent,
-            max_recent,
-            max_ghost,
+            recent: LinkedHashMap::with_capacity(size),
+            frequent: LinkedHashMap::with_capacity(size),
+            ghost: LinkedHashMap::with_capacity(ghost_size),
+            size,
+            ghost_size,
         }
     }
 
@@ -202,29 +203,6 @@ impl<K: Eq + Hash, V> Cache<K, V> {
         self.recent.get(key).or_else(|| self.frequent.get(key))
     }
 
-    /// Returns a reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but Eq on the borrowed form
-    /// must match those for the key type.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_2q::Cache;
-    ///
-    /// let mut cache = Cache::new(32);
-    /// cache.insert(1, "a");
-    /// assert_eq!(cache.get(&1), Some(&"a"));
-    /// assert_eq!(cache.get(&2), None);
-    /// ```
-    pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Option<&V>
-    where
-        K: Borrow<Q>,
-        Q: Eq + Hash,
-    {
-        self.get_mut(key).map(|x| &*x)
-    }
-
     /// Returns a mutable reference to the value corresponding to the key.
     ///
     /// The key may be any borrowed form of the cache's key type, but
@@ -238,12 +216,12 @@ impl<K: Eq + Hash, V> Cache<K, V> {
     ///
     /// let mut cache = Cache::new(8);
     /// cache.insert(1, "a");
-    /// if let Some(x) = cache.get_mut(&1) {
+    /// if let Some(x) = cache.get(&1) {
     ///     *x = "b";
     /// }
-    /// assert_eq!(cache.get(&1), Some(&"b"));
+    /// assert_eq!(cache.get(&1), Some(&mut "b"));
     /// ```
-    pub fn get_mut<Q: ?Sized>(&mut self, key: &Q) -> Option<&mut V>
+    pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Eq + Hash,
@@ -798,6 +776,37 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
     pub fn into_key(self) -> K {
         self.key
     }
+
+    /// If this vacant entry is remembered
+    ///
+    /// Keys are remembered after they are evicted from the cache. If this entry is remembered,
+    /// if inserted, it will be insert to a `frequent` list, instead of the usual `recent` list
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_2q::{Cache, Entry};
+    ///
+    /// let mut cache: Cache<&str, u32> = Cache::new(1);
+    ///
+    /// if let Entry::Vacant(v) = cache.entry("poneyland") {
+    ///     assert!(!v.is_remembered());
+    /// } else {
+    ///     panic!("Entry should be vacant");
+    /// }
+    ///
+    /// cache.insert("poneyland", 0);
+    /// cache.insert("other", 1); // Force poneyland out of the cache
+    /// if let Entry::Vacant(v) = cache.entry("poneyland") {
+    ///     assert!(v.is_remembered());
+    ///     v.insert(0);
+    /// } else {
+    ///     panic!("Entry should be vacant");
+    /// }
+    /// ```
+    pub fn is_remembered(&self) -> bool {
+        self.kind == VacantKind::Ghost
+    }
 }
 
 impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
@@ -823,15 +832,15 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
         match kind {
             VacantKind::Ghost => {
                 cache.ghost.remove(&key).expect("No ghost with key");
-                if cache.frequent.len() + 1 > cache.max_frequent {
+                if cache.frequent.len() + 1 > cache.size {
                     cache.frequent.pop_front();
                 }
                 cache.frequent.entry(key).or_insert(value)
             }
             VacantKind::Unknown => {
-                if cache.recent.len() + 1 > cache.max_recent {
+                if cache.recent.len() + 1 > cache.size {
                     let (old_key, _) = cache.recent.pop_front().unwrap();
-                    if cache.ghost.len() + 1 > cache.max_ghost {
+                    if cache.ghost.len() + 1 > cache.ghost_size {
                         cache.ghost.pop_back();
                     }
                     cache.ghost.insert(old_key, ());
@@ -898,7 +907,14 @@ mod tests {
     use super::Cache;
 
     #[test]
-    fn cache_zero_size() {
+    fn expected_sizes() {
+        let cache: Cache<u8, u8> = Cache::new(16);
+        assert_eq!(cache.size, 16);
+        assert_eq!(cache.ghost_size, 16 * 4);
+    }
+
+    #[test]
+    fn cache_zero_sized_entries() {
         let mut cache = Cache::new(8);
         for _ in 0..1024 {
             cache.entry(()).or_insert_with(|| ());
@@ -923,15 +939,41 @@ mod tests {
     fn size_1_cache() {
         let mut cache = Cache::new(1);
         cache.insert(100, "value");
-        assert_eq!(cache.get(&100), Some(&"value"));
+        assert_eq!(cache.get(&100), Some(&mut "value"));
         cache.insert(200, "other");
-        assert_eq!(cache.get(&200), Some(&"other"));
+        assert_eq!(cache.get(&200), Some(&mut "other"));
         assert_eq!(cache.get(&100), None);
+        assert!(cache.ghost.contains_key(&100));
         cache.insert(10, "value");
-        assert_eq!(cache.get(&10), Some(&"value"));
+        assert_eq!(cache.get(&10), Some(&mut "value"));
+        assert!(cache.ghost.contains_key(&100));
+        assert!(cache.ghost.contains_key(&200));
         cache.insert(20, "other");
-        assert_eq!(cache.get(&20), Some(&"other"));
+        assert_eq!(cache.get(&20), Some(&mut "other"));
         assert_eq!(cache.get(&10), None);
         assert_eq!(cache.get(&100), None);
+    }
+
+    #[test]
+    fn frequents() {
+        let mut cache = Cache::new(2);
+        cache.insert(100, "100");
+        cache.insert(200, "200");
+        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&100, &"100"), (&200, &"200")]);
+        cache.insert(300, "300");
+        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&200, &"200"), (&300, &"300")]);
+        assert_eq!(cache.ghost.iter().collect::<Vec<_>>(), vec![(&100, &())]);
+        cache.insert(400, "400");
+        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&300, &"300"), (&400, &"400")]);
+        assert_eq!(cache.ghost.iter().collect::<Vec<_>>(), vec![(&100, &()), (&200, &())]);
+        cache.insert(100, "100");
+        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&300, &"300"), (&400, &"400")]);
+        assert_eq!(cache.ghost.iter().collect::<Vec<_>>(), vec![(&200, &())]);
+        assert_eq!(cache.frequent.iter().collect::<Vec<_>>(), vec![(&100, &"100")]);
+
+        for x in 500..600 {
+            cache.insert(x, "junk");
+        }
+        assert_eq!(cache.get(&100), Some(&mut "100"));
     }
 }
