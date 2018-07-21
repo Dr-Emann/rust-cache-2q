@@ -1,4 +1,7 @@
-# [unreleased]
+# 0.9.0
+
+## Changed
+* Use Linked Hashmaps to prevent linear lookups. This adds a `Hash` generic bound in a lot of places
 
 # 0.8.4
 
