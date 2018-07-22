@@ -901,7 +901,10 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
         self.inner.nth(n)
     }
 
-    fn find<P>(&mut self, predicate: P) -> Option<Self::Item> where P: FnMut(&Self::Item) -> bool {
+    fn find<P>(&mut self, predicate: P) -> Option<Self::Item>
+    where
+        P: FnMut(&Self::Item) -> bool,
+    {
         self.inner.find(predicate)
     }
 }
@@ -975,17 +978,35 @@ mod tests {
         let mut cache = Cache::new(2);
         cache.insert(100, "100");
         cache.insert(200, "200");
-        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&100, &"100"), (&200, &"200")]);
+        assert_eq!(
+            cache.recent.iter().collect::<Vec<_>>(),
+            vec![(&100, &"100"), (&200, &"200")]
+        );
         cache.insert(300, "300");
-        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&200, &"200"), (&300, &"300")]);
+        assert_eq!(
+            cache.recent.iter().collect::<Vec<_>>(),
+            vec![(&200, &"200"), (&300, &"300")]
+        );
         assert_eq!(cache.ghost.iter().collect::<Vec<_>>(), vec![(&100, &())]);
         cache.insert(400, "400");
-        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&300, &"300"), (&400, &"400")]);
-        assert_eq!(cache.ghost.iter().collect::<Vec<_>>(), vec![(&100, &()), (&200, &())]);
+        assert_eq!(
+            cache.recent.iter().collect::<Vec<_>>(),
+            vec![(&300, &"300"), (&400, &"400")]
+        );
+        assert_eq!(
+            cache.ghost.iter().collect::<Vec<_>>(),
+            vec![(&100, &()), (&200, &())]
+        );
         cache.insert(100, "100");
-        assert_eq!(cache.recent.iter().collect::<Vec<_>>(), vec![(&300, &"300"), (&400, &"400")]);
+        assert_eq!(
+            cache.recent.iter().collect::<Vec<_>>(),
+            vec![(&300, &"300"), (&400, &"400")]
+        );
         assert_eq!(cache.ghost.iter().collect::<Vec<_>>(), vec![(&200, &())]);
-        assert_eq!(cache.frequent.iter().collect::<Vec<_>>(), vec![(&100, &"100")]);
+        assert_eq!(
+            cache.frequent.iter().collect::<Vec<_>>(),
+            vec![(&100, &"100")]
+        );
 
         for x in 500..600 {
             cache.insert(x, "junk");
