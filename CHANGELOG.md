@@ -3,6 +3,8 @@
 ## Added
 * `VacantEntry::is_remembered()` to test if a vacant entry is remembered, and will become a 
 frequent entry if inserted
+* More functions are implemented in a faster way on `Iter`
+
 
 ## Changed
 * `Cache::get()` removed
