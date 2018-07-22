@@ -853,7 +853,7 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
 type InnerIter<'a, K, V> =
     iter::Chain<linked_hash_map::Iter<'a, K, V>, linked_hash_map::Iter<'a, K, V>>;
 
-/// An iterator over the entries of a `Cache`.
+/// An iterator over the entries of a [`Cache`].
 ///
 /// This `struct` is created by the [`iter`] method on [`Cache`]. See its
 /// documentation for more.
