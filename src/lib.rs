@@ -283,7 +283,7 @@ impl<K: Eq + Hash, V> Cache<K, V> {
                 entry: if let linked_hash_map::Entry::Occupied(entry) = self.recent.entry(key) {
                     entry
                 } else {
-                    panic!("frequent contains key, but no entry");
+                    panic!("recent contains key, but no entry");
                 },
             });
         }
