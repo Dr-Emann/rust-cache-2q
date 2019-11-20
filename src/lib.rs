@@ -310,24 +310,10 @@ impl<K: Eq + Hash, V, S: BuildHasher> Cache<K, V, S> {
     /// ```
     pub fn peek_entry(&mut self, key: K) -> Entry<K, V, S> {
         if self.recent.contains_key(&key) {
-            return Entry::Occupied(OccupiedEntry {
-                kind: OccupiedKind::Recent,
-                entry: if let linked_hash_map::Entry::Occupied(entry) = self.recent.entry(key) {
-                    entry
-                } else {
-                    panic!("recent contains key, but no entry");
-                },
-            });
+            return Entry::Occupied(OccupiedEntry::new(OccupiedKind::Recent, key, &mut self.recent));
         }
         if self.frequent.contains_key(&key) {
-            return Entry::Occupied(OccupiedEntry {
-                kind: OccupiedKind::Frequent,
-                entry: if let linked_hash_map::Entry::Occupied(entry) = self.frequent.entry(key) {
-                    entry
-                } else {
-                    panic!("frequent contains key, but no entry");
-                },
-            });
+            return Entry::Occupied(OccupiedEntry::new(OccupiedKind::Frequent, key, &mut self.frequent));
         }
         if self.ghost.contains_key(&key) {
             return Entry::Vacant(VacantEntry {
@@ -360,24 +346,10 @@ impl<K: Eq + Hash, V, S: BuildHasher> Cache<K, V, S> {
     /// ```
     pub fn entry(&mut self, key: K) -> Entry<K, V, S> {
         if self.recent.get_refresh(&key).is_some() {
-            return Entry::Occupied(OccupiedEntry {
-                kind: OccupiedKind::Recent,
-                entry: if let linked_hash_map::Entry::Occupied(entry) = self.recent.entry(key) {
-                    entry
-                } else {
-                    panic!("recent contains key, but no entry");
-                },
-            });
+            return Entry::Occupied(OccupiedEntry::new(OccupiedKind::Recent, key, &mut self.recent));
         }
         if self.frequent.get_refresh(&key).is_some() {
-            return Entry::Occupied(OccupiedEntry {
-                kind: OccupiedKind::Frequent,
-                entry: if let linked_hash_map::Entry::Occupied(entry) = self.frequent.entry(key) {
-                    entry
-                } else {
-                    panic!("frequent contains key, but no entry");
-                },
-            });
+            return Entry::Occupied(OccupiedEntry::new(OccupiedKind::Frequent, key, &mut self.frequent));
         }
         if self.ghost.contains_key(&key) {
             return Entry::Vacant(VacantEntry {
@@ -622,6 +594,16 @@ impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug, S: 'a + BuildHasher
 }
 
 impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> OccupiedEntry<'a, K, V, S> {
+    fn new(kind: OccupiedKind, key: K, map: &'a mut LinkedHashMap<K, V, S>) -> Self {
+        let entry = match map.entry(key) {
+            linked_hash_map::Entry::Occupied(entry) => entry,
+            linked_hash_map::Entry::Vacant(_) => panic!("Expected entry for key"),
+        };
+        Self {
+            kind,
+            entry,
+        }
+    }
     /// Gets a reference to the key in the entry.
     ///
     /// # Examples
