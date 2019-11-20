@@ -16,8 +16,6 @@
 )]
 #![warn(clippy::pedantic)]
 
-extern crate linked_hash_map;
-
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::Hash;

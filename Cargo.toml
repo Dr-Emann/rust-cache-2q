@@ -3,6 +3,7 @@ name = "cache_2q"
 version = "0.10.0"
 authors = ["Zachary Dremann <dremann@gmail.com>"]
 description = "A 2Q Cache which maps keys to values"
+edition = "2018"
 
 repository = "https://github.com/Dr-Emann/rust-cache-2q"
 documentation = "https://docs.rs/cache_2q/"
