@@ -12,16 +12,17 @@
     unstable_features,
     unused_import_braces,
     unused_qualifications,
-    clippy::all,
+    clippy::all
 )]
 #![warn(clippy::pedantic)]
 
 use std::borrow::Borrow;
 use std::fmt;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::iter;
 
 use linked_hash_map::LinkedHashMap;
+use std::collections::hash_map::RandomState;
 
 /// A 2Q Cache which maps keys to values
 ///
@@ -106,16 +107,16 @@ use linked_hash_map::LinkedHashMap;
 /// let stat = player_stats.entry("attack").or_insert(100);
 /// *stat += random_stat_buff();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cache<K: Eq + Hash, V> {
-    recent: LinkedHashMap<K, V>,
-    frequent: LinkedHashMap<K, V>,
-    ghost: LinkedHashMap<K, ()>,
+#[derive(Clone, PartialEq, Eq)]
+pub struct Cache<K: Eq + Hash, V, S: BuildHasher = RandomState> {
+    recent: LinkedHashMap<K, V, S>,
+    frequent: LinkedHashMap<K, V, S>,
+    ghost: LinkedHashMap<K, (), S>,
     size: usize,
     ghost_size: usize,
 }
 
-impl<K: Eq + Hash, V> Cache<K, V> {
+impl<K: Eq + Hash, V> Cache<K, V, RandomState> {
     /// Creates an empty cache, with the specified size
     ///
     /// The returned cache will have enough room for `size` recent entries,
@@ -138,17 +139,48 @@ impl<K: Eq + Hash, V> Cache<K, V> {
     ///
     /// [VacantEntry::insert]: struct.VacantEntry.html#method.insert
     pub fn new(size: usize) -> Self {
+        Self::with_hasher(size, RandomState::new())
+    }
+}
+
+impl<K: Eq + Hash, V, S: BuildHasher + Clone> Cache<K, V, S> {
+    /// Creates an empty `Cache` with the specified capacity, using `hash_builder` to hash the keys
+    ///
+    /// The returned cache will have enough room for `size` recent entries,
+    /// and `size` frequent entries. In addition, up to `size * 4` keys will be kept
+    /// as remembered items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_2q::Cache;
+    /// use std::collections::hash_map::DefaultHasher;
+    /// use std::hash::BuildHasherDefault;
+    ///
+    /// let mut cache: Cache<u64, Vec<u8>, BuildHasherDefault<DefaultHasher>> = Cache::with_hasher(16, BuildHasherDefault::default());
+    /// cache.insert(1, vec![1,2,3,4]);
+    /// assert_eq!(*cache.get(&1).unwrap(), &[1,2,3,4]);
+    /// ```
+    ///
+    /// # Panics
+    /// panics if `size` is zero. A zero-sized cache isn't very useful, and breaks some apis
+    /// (like [VacantEntry::insert], which returns a reference to the newly inserted item)
+    ///
+    /// [VacantEntry::insert]: struct.VacantEntry.html#method.insert
+    pub fn with_hasher(size: usize, hash_builder: S) -> Self {
         assert!(size > 0);
         let ghost_size = size * 4;
         Self {
-            recent: LinkedHashMap::with_capacity(size),
-            frequent: LinkedHashMap::with_capacity(size),
-            ghost: LinkedHashMap::with_capacity(ghost_size),
+            recent: LinkedHashMap::with_capacity_and_hasher(size, hash_builder.clone()),
+            frequent: LinkedHashMap::with_capacity_and_hasher(size, hash_builder.clone()),
+            ghost: LinkedHashMap::with_capacity_and_hasher(ghost_size, hash_builder),
             size,
             ghost_size,
         }
     }
+}
 
+impl<K: Eq + Hash, V, S: BuildHasher> Cache<K, V, S> {
     /// Returns true if the cache contains a value for the specified key.
     ///
     /// The key may be any borrowed form of the cache's key type, but
@@ -276,7 +308,7 @@ impl<K: Eq + Hash, V> Cache<K, V> {
     ///     assert_eq!(string, &i.to_string());
     /// }
     /// ```
-    pub fn peek_entry(&mut self, key: K) -> Entry<K, V> {
+    pub fn peek_entry(&mut self, key: K) -> Entry<K, V, S> {
         if self.recent.contains_key(&key) {
             return Entry::Occupied(OccupiedEntry {
                 kind: OccupiedKind::Recent,
@@ -326,7 +358,7 @@ impl<K: Eq + Hash, V> Cache<K, V> {
     ///     assert_eq!(string, &i.to_string());
     /// }
     /// ```
-    pub fn entry(&mut self, key: K) -> Entry<K, V> {
+    pub fn entry(&mut self, key: K) -> Entry<K, V, S> {
         if self.recent.get_refresh(&key).is_some() {
             return Entry::Occupied(OccupiedEntry {
                 kind: OccupiedKind::Recent,
@@ -471,17 +503,25 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> IntoIterator for &'a Cache<K, V> {
     }
 }
 
+impl<K: Eq + Hash + fmt::Debug, V: fmt::Debug, S: BuildHasher> fmt::Debug for Cache<K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
 /// A view into a single entry in a cache, which may either be vacant or occupied.
 ///
 /// This enum is constructed from the entry method on Cache.
-pub enum Entry<'a, K: 'a + Eq + Hash, V: 'a> {
+pub enum Entry<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher = RandomState> {
     /// An occupied entry
-    Occupied(OccupiedEntry<'a, K, V>),
+    Occupied(OccupiedEntry<'a, K, V, S>),
     /// An vacant entry
-    Vacant(VacantEntry<'a, K, V>),
+    Vacant(VacantEntry<'a, K, V, S>),
 }
 
-impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug for Entry<'a, K, V> {
+impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug, S: 'a + BuildHasher> fmt::Debug
+    for Entry<'a, K, V, S>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Entry::Vacant(ref v) => f.debug_tuple("Entry").field(v).finish(),
@@ -490,7 +530,7 @@ impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug for Entr
     }
 }
 
-impl<'a, K: 'a + Eq + Hash, V: 'a> Entry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> Entry<'a, K, V, S> {
     /// Returns a reference to this entry's key.
     ///
     /// # Examples
@@ -557,13 +597,13 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> Entry<'a, K, V> {
 ///
 /// [`Cache`]: struct.Cache.html
 /// [`Entry`]: enum.Entry.html
-pub struct OccupiedEntry<'a, K: 'a + Eq + Hash, V: 'a> {
+pub struct OccupiedEntry<'a, K: 'a + Eq + Hash, V: 'a, S: 'a = RandomState> {
     kind: OccupiedKind,
-    entry: linked_hash_map::OccupiedEntry<'a, K, V>,
+    entry: linked_hash_map::OccupiedEntry<'a, K, V, S>,
 }
 
-impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug
-    for OccupiedEntry<'a, K, V>
+impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug, S: 'a + BuildHasher> fmt::Debug
+    for OccupiedEntry<'a, K, V, S>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("OccupiedEntry")
@@ -581,7 +621,7 @@ impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug
     }
 }
 
-impl<'a, K: 'a + Eq + Hash, V: 'a> OccupiedEntry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> OccupiedEntry<'a, K, V, S> {
     /// Gets a reference to the key in the entry.
     ///
     /// # Examples
@@ -721,13 +761,15 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> OccupiedEntry<'a, K, V> {
 ///
 /// [`Cache`]: struct.Cache.html
 /// [`Entry`]: enum.Entry.html
-pub struct VacantEntry<'a, K: 'a + Eq + Hash, V: 'a> {
-    cache: &'a mut Cache<K, V>,
+pub struct VacantEntry<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher = RandomState> {
+    cache: &'a mut Cache<K, V, S>,
     kind: VacantKind,
     key: K,
 }
 
-impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug for VacantEntry<'a, K, V> {
+impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug, S: 'a + BuildHasher> fmt::Debug
+    for VacantEntry<'a, K, V, S>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("VacantEntry")
             .field("key", self.key())
@@ -736,7 +778,7 @@ impl<'a, K: 'a + fmt::Debug + Eq + Hash, V: 'a + fmt::Debug> fmt::Debug for Vaca
     }
 }
 
-impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> VacantEntry<'a, K, V, S> {
     /// Gets a reference to the key that would be used when inserting a value
     /// through the `VacantEntry`.
     ///
@@ -808,7 +850,7 @@ impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
     }
 }
 
-impl<'a, K: 'a + Eq + Hash, V: 'a> VacantEntry<'a, K, V> {
+impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> VacantEntry<'a, K, V, S> {
     /// Sets the value of the entry with the VacantEntry's key,
     /// and returns a mutable reference to it.
     ///
