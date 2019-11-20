@@ -11,9 +11,10 @@
     unsafe_code,
     unstable_features,
     unused_import_braces,
-    unused_qualifications
+    unused_qualifications,
+    clippy::all,
 )]
-#![cfg_attr(feature = "cargo-clippy", warn(clippy_pedantic))]
+#![warn(clippy::pedantic)]
 
 extern crate linked_hash_map;
 
