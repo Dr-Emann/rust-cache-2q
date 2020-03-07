@@ -562,6 +562,37 @@ impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> Entry<'a, K, V, S> {
             Entry::Vacant(entry) => entry.insert(default()),
         }
     }
+
+    /// Provides in-place mutable access to an occupied entry before any
+    /// potential inserts into the map.
+    ///
+    /// # Examples
+    /// ```
+    /// use cache_2q::Cache;
+    ///
+    /// let mut cache = Cache::new(1);
+    /// cache.entry("poneyland")
+    ///    .and_modify(|e| { *e += 1 })
+    ///    .or_insert(42);
+    /// assert_eq!(*cache.get("poneyland").unwrap(), 42);
+    ///
+    /// cache.entry("poneyland")
+    ///    .and_modify(|e| { *e += 1 })
+    ///    .or_insert(42);
+    /// assert_eq!(*cache.get("poneyland").unwrap(), 43);
+    /// ```
+    pub fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut V),
+    {
+        match self {
+            Entry::Occupied(mut entry) => {
+                f(entry.get_mut());
+                Entry::Occupied(entry)
+            },
+            Entry::Vacant(entry) => Entry::Vacant(entry)
+        }
+    }
 }
 
 impl<'a, K: 'a + Eq + Hash, V: 'a + Default, S: 'a + BuildHasher> Entry<'a, K, V, S> {
