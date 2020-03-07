@@ -564,6 +564,26 @@ impl<'a, K: 'a + Eq + Hash, V: 'a, S: 'a + BuildHasher> Entry<'a, K, V, S> {
     }
 }
 
+impl<'a, K: 'a + Eq + Hash, V: 'a + Default, S: 'a + BuildHasher> Entry<'a, K, V, S> {
+    /// Ensures a value is in the entry by inserting the default value if empty, and returns a
+    /// mutable reference to the value in the entry.
+    ///
+    /// # Examples
+    /// ```
+    /// use cache_2q::Cache;
+    ///
+    /// let mut cache = Cache::new(1);
+    /// assert_eq!(*cache.entry(1).or_default(), 0u8);
+    /// assert_eq!(cache.get(&1), Some(&mut 0))
+    /// ```
+    pub fn or_default(self) -> &'a mut V {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(V::default()),
+        }
+    }
+}
+
 /// A view into an occupied entry in a [`Cache`].
 /// It is part of the [`Entry`] enum.
 ///
